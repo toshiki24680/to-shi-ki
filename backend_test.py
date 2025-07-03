@@ -55,8 +55,8 @@ class XiaoBaCrawlerTester:
         )
         if success:
             data = response.json()
-            if data.get('version') == "2.1":
-                print("✅ Version information correct: 2.1")
+            if data.get('version') == "2.5":
+                print("✅ Version information correct: 2.5")
             else:
                 print(f"❌ Version information incorrect: {data.get('version')}")
         return success
@@ -71,10 +71,19 @@ class XiaoBaCrawlerTester:
         )
         if success:
             data = response.json()
-            if data.get('version') == "2.1":
-                print("✅ Version information correct: 2.1")
+            if data.get('version') == "2.5":
+                print("✅ Version information correct: 2.5")
             else:
                 print(f"❌ Version information incorrect: {data.get('version')}")
+            
+            # Check for new features
+            features = data.get('features', [])
+            expected_features = ["45秒自动爬虫", "多账号管理", "数据累计逻辑", "关键词统计", "数据筛选", "增强CSV导出"]
+            for feature in expected_features:
+                if feature in features:
+                    print(f"✅ Feature found: {feature}")
+                else:
+                    print(f"❌ Feature missing: {feature}")
         return success
 
     def test_start_crawler(self):
