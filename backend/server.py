@@ -1,11 +1,11 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 import pandas as pd
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 import random
 import platform
 import io
@@ -13,6 +13,7 @@ import logging
 import time
 import re
 import os
+import asyncio
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -22,31 +23,53 @@ from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
+from collections import defaultdict
 
-app = FastAPI(title="小八爬虫管理系统", description="师门登录优化版 v2.1")
+app = FastAPI(title="小八爬虫管理系统", description="师门登录优化版 v2.5 - 自动化增强版")
 api_router = APIRouter(prefix="/api")
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# 内存存储
+# 全局数据存储
 accounts_db = []
 memory_data = []
+keyword_stats = defaultdict(int)
+crawl_history = []
+auto_crawl_running = False
+accumulated_data = {}
+
+# 关键词监控列表
+MONITOR_KEYWORDS = [
+    "人脸提示", "没钱了", "网络异常", "登录失败", "验证码", 
+    "账号冻结", "系统维护", "连接超时", "服务器错误", "掉线"
+]
 
 class CrawlerAccount(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     username: str
     password: str
-    status: str = "inactive"
+    status: str = "inactive"  # inactive, active, running, paused, error
     preferred_guild: Optional[str] = None
     last_crawl: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    is_auto_enabled: bool = True
+    crawl_count: int = 0
+    success_rate: float = 0.0
+    last_error: Optional[str] = None
 
 class CrawlerAccountCreate(BaseModel):
     username: str
     password: str
     preferred_guild: Optional[str] = None
+
+class CrawlerAccountUpdate(BaseModel):
+    username: Optional[str] = None
+    password: Optional[str] = None
+    preferred_guild: Optional[str] = None
+    is_auto_enabled: Optional[bool] = None
+    status: Optional[str] = None
 
 class CrawlerData(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -64,12 +87,31 @@ class CrawlerData(BaseModel):
     status: str
     runtime: str
     crawl_timestamp: datetime = Field(default_factory=datetime.utcnow)
+    accumulated_count: int = 0
+    cycle_count: int = 0
 
 class CrawlerConfig(BaseModel):
     target_url: str = "http://xiao8.lodsve.com:6007/x8login"
-    crawl_interval: int = 50
+    crawl_interval: int = 45
     headless: bool = True
     timeout: int = 30
+    auto_crawl_enabled: bool = False
+    max_concurrent_crawlers: int = 3
+
+class FilterRequest(BaseModel):
+    account_username: Optional[str] = None
+    guild: Optional[str] = None
+    type: Optional[str] = None
+    status: Optional[str] = None
+    min_level: Optional[int] = None
+    max_level: Optional[int] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    keyword: Optional[str] = None
+
+class BatchOperationRequest(BaseModel):
+    account_ids: List[str]
+    operation: str  # start, stop, pause, resume, delete
 
 # 优化的师门登录爬虫类
 class OptimizedGuildCrawler:
@@ -139,91 +181,35 @@ class OptimizedGuildCrawler:
             logger.info("登录页面加载完成")
             time.sleep(2)  # 确保页面完全渲染
             
-            # 2. 点击师门按钮 - 基于实际页面结构
-            guild_clicked = False
-            
-            # 策略1: 通过文本"师门"查找按钮
+            # 2. 确保师门选项被选中
             try:
-                guild_button = self.driver.find_element(By.XPATH, "//button[text()='师门']")
-                if guild_button.is_displayed() and guild_button.is_enabled():
-                    guild_button.click()
-                    logger.info("✅ 通过文本找到师门按钮并点击")
-                    guild_clicked = True
-            except NoSuchElementException:
-                pass
-            
-            # 策略2: 通过包含"师门"文本查找
-            if not guild_clicked:
-                try:
-                    guild_button = self.driver.find_element(By.XPATH, "//button[contains(text(), '师门')]")
-                    if guild_button.is_displayed() and guild_button.is_enabled():
-                        guild_button.click()
-                        logger.info("✅ 通过包含文本找到师门按钮并点击")
-                        guild_clicked = True
-                except NoSuchElementException:
-                    pass
-            
-            # 策略3: 查找input类型的师门按钮
-            if not guild_clicked:
-                try:
-                    guild_input = self.driver.find_element(By.XPATH, "//input[@value='师门']")
-                    if guild_input.is_displayed() and guild_input.is_enabled():
-                        guild_input.click()
-                        logger.info("✅ 找到师门input按钮并点击")
-                        guild_clicked = True
-                except NoSuchElementException:
-                    pass
-            
-            # 策略4: 根据页面结构，假设第一个蓝色按钮是师门
-            if not guild_clicked:
-                try:
-                    buttons = self.driver.find_elements(By.TAG_NAME, "button")
-                    visible_buttons = [btn for btn in buttons if btn.is_displayed() and btn.is_enabled()]
-                    
-                    if len(visible_buttons) >= 1:
-                        visible_buttons[0].click()
-                        logger.info("✅ 点击第一个可见按钮（推测为师门）")
-                        guild_clicked = True
-                except Exception as e:
-                    logger.warning(f"按钮策略失败: {e}")
-            
-            if guild_clicked:
-                time.sleep(1)  # 等待师门选择生效
-                logger.info("师门按钮点击完成")
-            else:
-                logger.warning("⚠️ 未找到师门按钮，继续登录流程")
+                select_element = self.driver.find_element(By.NAME, "sprite_type")
+                if select_element.get_attribute("value") != "sm":
+                    select_element.send_keys("sm")
+                logger.info("✅ 师门选项确认选中")
+            except Exception as e:
+                logger.warning(f"师门选项设置警告: {e}")
             
             # 3. 填写用户名和密码
             logger.info("开始填写登录信息...")
             
-            # 查找所有输入框
-            input_fields = self.driver.find_elements(By.TAG_NAME, "input")
-            text_inputs = [inp for inp in input_fields 
-                          if inp.get_attribute('type') in ['text', 'email', 'tel', None] 
-                          and inp.is_displayed()]
-            password_inputs = [inp for inp in input_fields 
-                             if inp.get_attribute('type') == 'password' 
-                             and inp.is_displayed()]
-            
-            logger.info(f"找到 {len(text_inputs)} 个文本输入框，{len(password_inputs)} 个密码输入框")
-            
             # 填写用户名
-            if text_inputs:
-                username_field = text_inputs[0]
+            try:
+                username_field = self.driver.find_element(By.NAME, "Username")
                 username_field.clear()
                 username_field.send_keys(self.account.username)
                 logger.info(f"✅ 用户名填写完成: {self.account.username}")
-            else:
+            except Exception:
                 logger.error("❌ 未找到用户名输入框")
                 return False
             
             # 填写密码
-            if password_inputs:
-                password_field = password_inputs[0]
+            try:
+                password_field = self.driver.find_element(By.NAME, "Password")
                 password_field.clear()
                 password_field.send_keys(self.account.password)
                 logger.info("✅ 密码填写完成")
-            else:
+            except Exception:
                 logger.error("❌ 未找到密码输入框")
                 return False
             
@@ -232,74 +218,18 @@ class OptimizedGuildCrawler:
             # 4. 点击登录按钮
             logger.info("查找并点击登录按钮...")
             
-            login_clicked = False
-            
-            # 策略1: 通过文本"登录"查找
             try:
-                login_button = self.driver.find_element(By.XPATH, "//button[text()='登录']")
-                if login_button.is_displayed() and login_button.is_enabled():
+                login_button = self.driver.find_element(By.CSS_SELECTOR, "button[type='submit']")
+                login_button.click()
+                logger.info("✅ 登录按钮点击成功")
+            except Exception:
+                try:
+                    login_button = self.driver.find_element(By.CLASS_NAME, "btn")
                     login_button.click()
-                    logger.info("✅ 通过文本找到登录按钮并点击")
-                    login_clicked = True
-            except NoSuchElementException:
-                pass
-            
-            # 策略2: 通过包含"登录"文本查找
-            if not login_clicked:
-                try:
-                    login_button = self.driver.find_element(By.XPATH, "//button[contains(text(), '登录')]")
-                    if login_button.is_displayed() and login_button.is_enabled():
-                        login_button.click()
-                        logger.info("✅ 通过包含文本找到登录按钮并点击")
-                        login_clicked = True
-                except NoSuchElementException:
-                    pass
-            
-            # 策略3: 查找input类型的登录按钮
-            if not login_clicked:
-                try:
-                    login_input = self.driver.find_element(By.XPATH, "//input[@value='登录']")
-                    if login_input.is_displayed() and login_input.is_enabled():
-                        login_input.click()
-                        logger.info("✅ 找到登录input按钮并点击")
-                        login_clicked = True
-                except NoSuchElementException:
-                    pass
-            
-            # 策略4: 查找submit类型按钮
-            if not login_clicked:
-                try:
-                    submit_buttons = self.driver.find_elements(By.CSS_SELECTOR, 
-                        "input[type='submit'], button[type='submit']")
-                    for btn in submit_buttons:
-                        if btn.is_displayed() and btn.is_enabled():
-                            btn.click()
-                            logger.info("✅ 找到submit按钮并点击")
-                            login_clicked = True
-                            break
+                    logger.info("✅ 通过class找到登录按钮并点击")
                 except Exception:
-                    pass
-            
-            # 策略5: 假设第二个按钮是登录（如果有两个按钮）
-            if not login_clicked:
-                try:
-                    buttons = self.driver.find_elements(By.TAG_NAME, "button")
-                    visible_buttons = [btn for btn in buttons if btn.is_displayed() and btn.is_enabled()]
-                    
-                    if len(visible_buttons) >= 2:
-                        visible_buttons[1].click()
-                        logger.info("✅ 点击第二个可见按钮（推测为登录）")
-                        login_clicked = True
-                    elif len(visible_buttons) == 1:
-                        visible_buttons[0].click()
-                        logger.info("✅ 点击唯一可见按钮（推测为登录）")
-                        login_clicked = True
-                except Exception as e:
-                    logger.warning(f"按钮策略登录失败: {e}")
-            
-            if not login_clicked:
-                logger.error("❌ 未找到登录按钮")
-                return False
+                    logger.error("❌ 未找到登录按钮")
+                    return False
             
             # 5. 等待登录完成
             logger.info("等待登录完成...")
@@ -369,6 +299,15 @@ class OptimizedGuildCrawler:
                             count_current = int(count_match.group(1)) if count_match else 0
                             count_total = int(count_match.group(2)) if count_match else 0
                             
+                            # 检查关键词
+                            status_text = cols[9].get_text(strip=True) if len(cols) > 9 else ""
+                            self.check_keywords(status_text)
+                            
+                            # 数据累计逻辑
+                            accumulated_count, cycle_count = self.calculate_accumulated_data(
+                                self.account.username, i, count_current, count_total
+                            )
+                            
                             data_item = CrawlerData(
                                 account_username=self.account.username,
                                 sequence_number=i,
@@ -381,8 +320,10 @@ class OptimizedGuildCrawler:
                                 count_current=count_current,
                                 count_total=count_total,
                                 total_time=cols[8].get_text(strip=True) if len(cols) > 8 else "",
-                                status=cols[9].get_text(strip=True) if len(cols) > 9 else "",
-                                runtime=cols[10].get_text(strip=True) if len(cols) > 10 else ""
+                                status=status_text,
+                                runtime=cols[10].get_text(strip=True) if len(cols) > 10 else "",
+                                accumulated_count=accumulated_count,
+                                cycle_count=cycle_count
                             )
                             data_list.append(data_item)
                         except Exception as e:
@@ -396,9 +337,52 @@ class OptimizedGuildCrawler:
             logger.error(f"提取师门数据失败: {str(e)}")
             return []
     
+    def check_keywords(self, text):
+        """检查关键词并统计"""
+        global keyword_stats
+        for keyword in MONITOR_KEYWORDS:
+            if keyword in text:
+                keyword_stats[keyword] += 1
+                logger.warning(f"发现关键词: {keyword} 在文本: {text}")
+    
+    def calculate_accumulated_data(self, username, seq_num, current_count, total_count):
+        """计算累计数据逻辑"""
+        global accumulated_data
+        
+        key = f"{username}_{seq_num}"
+        
+        if key not in accumulated_data:
+            accumulated_data[key] = {
+                "last_count": current_count,
+                "accumulated": 0,
+                "cycles": 0
+            }
+        
+        last_data = accumulated_data[key]
+        
+        # 检测重置（从高数值跳到低数值，如 11/199 → 1/199）
+        if current_count < last_data["last_count"] and last_data["last_count"] > total_count * 0.05:
+            last_data["accumulated"] += last_data["last_count"]
+            last_data["cycles"] += 1
+            logger.info(f"数据重置检测: {username} seq{seq_num} 从 {last_data['last_count']} 重置到 {current_count}")
+        
+        last_data["last_count"] = current_count
+        
+        return last_data["accumulated"] + current_count, last_data["cycles"]
+    
     def save_data(self, data_list):
         """保存数据到内存"""
-        global memory_data
+        global memory_data, crawl_history
+        
+        # 保存历史记录
+        crawl_history.append({
+            "timestamp": datetime.utcnow(),
+            "account": self.account.username,
+            "success": len(data_list) > 0,
+            "data_count": len(data_list)
+        })
+        
+        # 更新主数据
         for data_item in data_list:
             # 检查是否已存在相同记录
             existing_index = -1
@@ -453,32 +437,342 @@ class OptimizedGuildCrawler:
                 pass
             self.driver = None
 
+# 自动爬虫任务
+async def auto_crawl_task():
+    """45秒自动爬虫任务"""
+    global auto_crawl_running, accounts_db
+    
+    logger.info("启动自动爬虫任务...")
+    
+    while auto_crawl_running:
+        try:
+            # 获取启用自动爬虫的账号
+            active_accounts = [acc for acc in accounts_db if acc.get("is_auto_enabled", True) and acc.get("status") != "error"]
+            
+            if not active_accounts:
+                logger.info("没有可用的自动爬虫账号")
+                await asyncio.sleep(45)
+                continue
+            
+            # 限制并发数量
+            config = CrawlerConfig()
+            max_concurrent = min(config.max_concurrent_crawlers, len(active_accounts))
+            
+            # 分批执行爬虫任务
+            for i in range(0, len(active_accounts), max_concurrent):
+                batch = active_accounts[i:i + max_concurrent]
+                tasks = []
+                
+                for acc_data in batch:
+                    # 更新账号状态
+                    for acc in accounts_db:
+                        if acc["id"] == acc_data["id"]:
+                            acc["status"] = "running"
+                            acc["last_crawl"] = datetime.utcnow()
+                            break
+                    
+                    # 创建爬虫任务
+                    account = CrawlerAccount(**acc_data)
+                    crawler = OptimizedGuildCrawler(account, config)
+                    tasks.append(asyncio.create_task(asyncio.to_thread(crawler.run_guild_crawl)))
+                
+                # 等待这批任务完成
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # 更新账号状态和统计
+                for j, result in enumerate(results):
+                    acc_data = batch[j]
+                    for acc in accounts_db:
+                        if acc["id"] == acc_data["id"]:
+                            acc["crawl_count"] = acc.get("crawl_count", 0) + 1
+                            if isinstance(result, Exception):
+                                acc["status"] = "error"
+                                acc["last_error"] = str(result)
+                                acc["success_rate"] = max(0, acc.get("success_rate", 0) - 0.1)
+                            elif result:
+                                acc["status"] = "active"
+                                acc["last_error"] = None
+                                acc["success_rate"] = min(1.0, acc.get("success_rate", 0) + 0.1)
+                            else:
+                                acc["status"] = "inactive"
+                                acc["success_rate"] = max(0, acc.get("success_rate", 0) - 0.05)
+                            break
+                
+                logger.info(f"完成一批爬虫任务: {len(batch)} 个账号")
+                
+                # 如果还有更多批次，等待一小段时间
+                if i + max_concurrent < len(active_accounts):
+                    await asyncio.sleep(10)
+            
+            logger.info(f"自动爬虫周期完成，等待 {config.crawl_interval} 秒...")
+            await asyncio.sleep(config.crawl_interval)
+            
+        except Exception as e:
+            logger.error(f"自动爬虫任务异常: {str(e)}")
+            await asyncio.sleep(45)
+
 # API路由
 @api_router.get("/")
 async def root():
     return {
         "message": "小八爬虫管理系统 - 师门登录优化版", 
-        "version": "2.1",
+        "version": "2.5",
         "architecture": platform.machine(),
-        "update": "2025-01-08 师门登录流程优化"
+        "update": "2025-01-08 自动化增强版",
+        "features": ["45秒自动爬虫", "多账号管理", "数据累计", "关键词统计", "数据筛选"]
     }
 
 @api_router.get("/version")
 async def get_version():
     return {
-        "version": "2.1",
+        "version": "2.5",
         "update_date": "2025-01-08",
-        "features": ["精确师门登录", "多策略按钮识别", "增强错误处理", "页面结构优化"],
+        "features": ["45秒自动爬虫", "多账号管理", "数据累计逻辑", "关键词统计", "数据筛选", "增强CSV导出"],
         "architecture": platform.machine(),
         "changelog": [
-            "✅ 基于实际页面结构优化师门按钮识别",
-            "✅ 增加多种按钮查找策略",
-            "✅ 优化页面加载等待逻辑", 
-            "✅ 增强登录流程错误处理",
-            "✅ 提升师门登录成功率"
+            "✅ 实现45秒自动爬虫持续运行",
+            "✅ 添加完整的多账号管理系统",
+            "✅ 实现数据累计逻辑（重置检测）",
+            "✅ 增加关键词监控和统计",
+            "✅ 实现数据筛选和分析功能",
+            "✅ 增强CSV导出功能"
         ]
     }
 
+# 自动爬虫控制
+@api_router.post("/crawler/auto/start")
+async def start_auto_crawler(background_tasks: BackgroundTasks):
+    global auto_crawl_running
+    if not auto_crawl_running:
+        auto_crawl_running = True
+        background_tasks.add_task(auto_crawl_task)
+        return {"message": "自动爬虫启动成功", "interval": "45秒", "version": "2.5"}
+    return {"message": "自动爬虫已在运行中"}
+
+@api_router.post("/crawler/auto/stop")
+async def stop_auto_crawler():
+    global auto_crawl_running
+    auto_crawl_running = False
+    return {"message": "自动爬虫停止成功"}
+
+@api_router.get("/crawler/auto/status")
+async def get_auto_crawler_status():
+    return {
+        "running": auto_crawl_running,
+        "interval": 45,
+        "total_accounts": len(accounts_db),
+        "active_accounts": len([acc for acc in accounts_db if acc.get("is_auto_enabled", True)]),
+        "crawl_history_count": len(crawl_history)
+    }
+
+# 账号管理
+@api_router.post("/accounts", response_model=CrawlerAccount)
+async def create_account(account: CrawlerAccountCreate):
+    # 检查用户名是否已存在
+    for acc in accounts_db:
+        if acc["username"] == account.username:
+            raise HTTPException(status_code=400, detail="用户名已存在")
+    
+    new_account = CrawlerAccount(**account.dict())
+    accounts_db.append(new_account.dict())
+    return new_account
+
+@api_router.get("/accounts")
+async def get_accounts():
+    return accounts_db
+
+@api_router.get("/accounts/{account_id}")
+async def get_account(account_id: str):
+    for acc in accounts_db:
+        if acc["id"] == account_id:
+            return acc
+    raise HTTPException(status_code=404, detail="账号不存在")
+
+@api_router.put("/accounts/{account_id}")
+async def update_account(account_id: str, account_update: CrawlerAccountUpdate):
+    for i, acc in enumerate(accounts_db):
+        if acc["id"] == account_id:
+            update_data = account_update.dict(exclude_unset=True)
+            accounts_db[i].update(update_data)
+            return accounts_db[i]
+    raise HTTPException(status_code=404, detail="账号不存在")
+
+@api_router.delete("/accounts/{account_id}")
+async def delete_account(account_id: str):
+    for i, acc in enumerate(accounts_db):
+        if acc["id"] == account_id:
+            deleted_account = accounts_db.pop(i)
+            return {"message": "账号删除成功", "account": deleted_account}
+    raise HTTPException(status_code=404, detail="账号不存在")
+
+@api_router.post("/accounts/batch")
+async def batch_operation(request: BatchOperationRequest):
+    """批量操作账号"""
+    affected_accounts = []
+    
+    for account_id in request.account_ids:
+        for acc in accounts_db:
+            if acc["id"] == account_id:
+                if request.operation == "start":
+                    acc["is_auto_enabled"] = True
+                    acc["status"] = "active"
+                elif request.operation == "stop":
+                    acc["is_auto_enabled"] = False
+                    acc["status"] = "inactive"
+                elif request.operation == "pause":
+                    acc["status"] = "paused"
+                elif request.operation == "resume":
+                    acc["status"] = "active"
+                elif request.operation == "delete":
+                    accounts_db.remove(acc)
+                
+                affected_accounts.append(acc)
+                break
+    
+    return {
+        "message": f"批量{request.operation}操作完成",
+        "affected_count": len(affected_accounts),
+        "accounts": affected_accounts
+    }
+
+# 数据管理和筛选
+@api_router.get("/crawler/data")
+async def get_data():
+    return memory_data
+
+@api_router.post("/crawler/data/filter")
+async def filter_data(filter_req: FilterRequest):
+    """数据筛选"""
+    filtered_data = memory_data.copy()
+    
+    if filter_req.account_username:
+        filtered_data = [d for d in filtered_data if d["account_username"] == filter_req.account_username]
+    
+    if filter_req.guild:
+        filtered_data = [d for d in filtered_data if filter_req.guild in d["guild"]]
+    
+    if filter_req.type:
+        filtered_data = [d for d in filtered_data if filter_req.type in d["type"]]
+    
+    if filter_req.status:
+        filtered_data = [d for d in filtered_data if filter_req.status in d["status"]]
+    
+    if filter_req.min_level:
+        filtered_data = [d for d in filtered_data if d["level"] >= filter_req.min_level]
+    
+    if filter_req.max_level:
+        filtered_data = [d for d in filtered_data if d["level"] <= filter_req.max_level]
+    
+    if filter_req.keyword:
+        filtered_data = [d for d in filtered_data if 
+                        filter_req.keyword.lower() in d["name"].lower() or
+                        filter_req.keyword.lower() in d["status"].lower()]
+    
+    if filter_req.start_date:
+        start_date = datetime.fromisoformat(filter_req.start_date.replace('Z', '+00:00'))
+        filtered_data = [d for d in filtered_data if 
+                        datetime.fromisoformat(d["crawl_timestamp"].replace('Z', '+00:00')) >= start_date]
+    
+    if filter_req.end_date:
+        end_date = datetime.fromisoformat(filter_req.end_date.replace('Z', '+00:00'))
+        filtered_data = [d for d in filtered_data if 
+                        datetime.fromisoformat(d["crawl_timestamp"].replace('Z', '+00:00')) <= end_date]
+    
+    return {
+        "total_count": len(memory_data),
+        "filtered_count": len(filtered_data),
+        "data": filtered_data
+    }
+
+# 统计分析
+@api_router.get("/crawler/stats")
+async def get_statistics():
+    """获取统计分析数据"""
+    if not memory_data:
+        return {"message": "暂无数据"}
+    
+    # 基础统计
+    total_records = len(memory_data)
+    unique_accounts = len(set(d["account_username"] for d in memory_data))
+    unique_guilds = len(set(d["guild"] for d in memory_data if d["guild"]))
+    unique_types = len(set(d["type"] for d in memory_data if d["type"]))
+    
+    # 等级统计
+    levels = [d["level"] for d in memory_data if d["level"] > 0]
+    avg_level = sum(levels) / len(levels) if levels else 0
+    max_level = max(levels) if levels else 0
+    min_level = min(levels) if levels else 0
+    
+    # 账号统计
+    account_stats = defaultdict(int)
+    for d in memory_data:
+        account_stats[d["account_username"]] += 1
+    
+    # 门派统计
+    guild_stats = defaultdict(int)
+    for d in memory_data:
+        if d["guild"]:
+            guild_stats[d["guild"]] += 1
+    
+    # 类型统计
+    type_stats = defaultdict(int)
+    for d in memory_data:
+        if d["type"]:
+            type_stats[d["type"]] += 1
+    
+    # 累计数据统计
+    total_accumulated = sum(d.get("accumulated_count", 0) for d in memory_data)
+    total_cycles = sum(d.get("cycle_count", 0) for d in memory_data)
+    
+    return {
+        "basic_stats": {
+            "total_records": total_records,
+            "unique_accounts": unique_accounts,
+            "unique_guilds": unique_guilds,
+            "unique_types": unique_types,
+            "avg_level": round(avg_level, 2),
+            "max_level": max_level,
+            "min_level": min_level
+        },
+        "account_distribution": dict(account_stats),
+        "guild_distribution": dict(guild_stats),
+        "type_distribution": dict(type_stats),
+        "accumulation_stats": {
+            "total_accumulated_count": total_accumulated,
+            "total_cycles": total_cycles,
+            "avg_accumulated_per_record": round(total_accumulated / total_records, 2) if total_records > 0 else 0
+        }
+    }
+
+# 关键词统计
+@api_router.get("/crawler/keywords")
+async def get_keyword_stats():
+    """获取关键词统计"""
+    return {
+        "keyword_stats": dict(keyword_stats),
+        "total_keywords_detected": sum(keyword_stats.values()),
+        "unique_keywords": len(keyword_stats),
+        "monitored_keywords": MONITOR_KEYWORDS
+    }
+
+@api_router.post("/crawler/keywords/reset")
+async def reset_keyword_stats():
+    """重置关键词统计"""
+    global keyword_stats
+    keyword_stats.clear()
+    return {"message": "关键词统计已重置"}
+
+# 爬虫历史
+@api_router.get("/crawler/history")
+async def get_crawl_history():
+    """获取爬虫历史记录"""
+    return {
+        "history": crawl_history[-100:],  # 最近100条记录
+        "total_crawls": len(crawl_history),
+        "success_rate": len([h for h in crawl_history if h["success"]]) / len(crawl_history) if crawl_history else 0
+    }
+
+# 原有API保持兼容
 @api_router.post("/crawler/start")
 async def start_crawler():
     if not accounts_db:
@@ -486,15 +780,7 @@ async def start_crawler():
         for username in default_accounts:
             account = CrawlerAccount(username=username, password="69203532xX")
             accounts_db.append(account.dict())
-    return {"message": "师门爬虫启动成功", "accounts": len(accounts_db), "version": "2.1"}
-
-@api_router.get("/crawler/accounts")
-async def get_accounts():
-    return accounts_db
-
-@api_router.get("/crawler/data")
-async def get_data():
-    return memory_data
+    return {"message": "师门爬虫启动成功", "accounts": len(accounts_db), "version": "2.5"}
 
 @api_router.post("/crawler/mock-data")
 async def generate_mock_data():
@@ -505,19 +791,21 @@ async def generate_mock_data():
                 account_username=account,
                 sequence_number=i + 1,
                 ip=f"222.210.79.{115 + i}",
-                type=random.choice(["鬼砍", "剑客", "杀手"]),
+                type=random.choice(["鬼砍", "剑客", "杀手", "跑商"]),
                 name=f"师门角色{i+1}",
                 level=random.randint(80, 120),
-                guild=random.choice(["青帮", "无门派", "九雷剑", "五毒", "天龙寺"]),
+                guild=random.choice(["青帮", "无门派", "九雷剑", "五毒", "天龙寺", "普陀山", "方寸山"]),
                 skill=str(random.randint(0, 3)),
                 count_current=random.randint(1, 50),
                 count_total=random.randint(100, 200),
                 total_time=f"{random.randint(1, 12)}/199",
-                status=random.choice(["在线", "离线", "修炼中"]),
-                runtime=f"{random.randint(0, 23):02d}:{random.randint(0, 59):02d}:00"
+                status=random.choice(["在线", "离线", "修炼中", "跑商中", "没钱了"]),
+                runtime=f"{random.randint(0, 23):02d}:{random.randint(0, 59):02d}:00",
+                accumulated_count=random.randint(0, 500),
+                cycle_count=random.randint(0, 5)
             )
             memory_data.append(data.dict())
-    return {"message": f"生成了 {len(memory_data)} 条师门演示数据（v2.1优化版）"}
+    return {"message": f"生成了 {len(memory_data)} 条师门演示数据（v2.5增强版）"}
 
 @api_router.post("/crawler/test/{username}")
 async def test_optimized_guild_login(username: str):
@@ -551,7 +839,7 @@ async def test_optimized_guild_login(username: str):
             "username": username,
             "test_result": result,
             "message": message,
-            "version": "2.1",
+            "version": "2.5",
             "login_type": "师门登录优化版"
         }
         
@@ -559,25 +847,29 @@ async def test_optimized_guild_login(username: str):
         return {
             "test_result": "failed", 
             "message": f"测试出错: {str(e)}",
-            "version": "2.1"
+            "version": "2.5"
         }
 
 @api_router.get("/crawler/status")
 async def get_status():
+    active_accounts = len([acc for acc in accounts_db if acc.get("status") == "active"])
     return {
         "total_accounts": len(accounts_db),
-        "active_accounts": 0,
+        "active_accounts": active_accounts,
         "total_records": len(memory_data),
-        "crawl_status": "stopped",
-        "system_info": f"师门登录优化版 v2.1 - {platform.machine()}",
-        "version": "2.1",
-        "last_update": "2025-01-08"
+        "crawl_status": "running" if auto_crawl_running else "stopped",
+        "system_info": f"师门登录优化版 v2.5 - {platform.machine()}",
+        "version": "2.5",
+        "last_update": "2025-01-08",
+        "auto_crawl_running": auto_crawl_running,
+        "keyword_alerts": sum(keyword_stats.values())
     }
 
 @api_router.get("/crawler/data/export")
 async def export_csv():
+    """增强的CSV导出功能"""
     if not memory_data:
-        df = pd.DataFrame(columns=["账号", "序号", "IP", "类型", "命名", "等级", "门派", "次数", "状态"])
+        df = pd.DataFrame(columns=["账号", "序号", "IP", "类型", "命名", "等级", "门派", "绝技", "当前次数", "总次数", "累计次数", "周期数", "总时间", "状态", "运行时间", "抓取时间"])
     else:
         df = pd.DataFrame([{
             "账号": item["account_username"],
@@ -588,10 +880,14 @@ async def export_csv():
             "等级": item["level"],
             "门派": item["guild"],
             "绝技": item["skill"],
-            "次数": f"{item['count_current']}/{item['count_total']}",
+            "当前次数": item["count_current"],
+            "总次数": item["count_total"],
+            "累计次数": item.get("accumulated_count", 0),
+            "周期数": item.get("cycle_count", 0),
             "总时间": item["total_time"],
             "状态": item["status"],
-            "运行时间": item["runtime"]
+            "运行时间": item["runtime"],
+            "抓取时间": item["crawl_timestamp"]
         } for item in memory_data])
     
     output = io.StringIO()
@@ -601,7 +897,7 @@ async def export_csv():
     return StreamingResponse(
         io.BytesIO(output.getvalue().encode('utf-8-sig')),
         media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=guild_crawler_v2.1.csv"}
+        headers={"Content-Disposition": "attachment; filename=guild_crawler_v2.5_enhanced.csv"}
     )
 
 app.include_router(api_router)
