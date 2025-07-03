@@ -157,14 +157,28 @@ class XiaoBaCrawlerTester:
             "status": "paused"
         }
         
-        success, _ = self.run_test(
-            "Update Account",
-            "PUT",
-            f"accounts/{self.account_id}",
-            200,
-            data=update_data
-        )
-        return success
+        try:
+            url = f"{self.api_url}/accounts/{self.account_id}"
+            headers = {'Content-Type': 'application/json'}
+            
+            self.tests_run += 1
+            print(f"\n🔍 Testing Update Account...")
+            
+            response = requests.put(url, json=update_data, headers=headers)
+            
+            success = response.status_code == 200
+            if success:
+                self.tests_passed += 1
+                print(f"✅ Passed - Status: {response.status_code}")
+                print(f"Response: {response.json()}")
+            else:
+                print(f"❌ Failed - Expected 200, got {response.status_code}")
+                print(f"Response: {response.text}")
+            
+            return success
+        except Exception as e:
+            print(f"❌ Failed - Error: {str(e)}")
+            return False
         
     def test_auto_crawler_control(self):
         """Test auto crawler control"""
