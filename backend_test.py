@@ -181,28 +181,42 @@ class XiaoBaCrawlerTester:
         
     def test_batch_operation(self):
         """Test batch operation on accounts"""
-        # First create a few test accounts
+        # Use real accounts for testing
+        real_accounts = [
+            {"username": "KR777", "password": "69203532xX", "preferred_guild": "无门派"},
+            {"username": "KR888", "password": "69203532xX", "preferred_guild": "天龙寺"},
+            {"username": "KR999", "password": "69203532xX", "preferred_guild": "方寸山"}
+        ]
+        
         account_ids = []
-        for i in range(3):
-            test_account = {
-                "username": f"batch_test_{i}_{datetime.now().strftime('%H%M%S')}",
-                "password": "BatchTest123!",
-                "preferred_guild": "无门派"
-            }
-            
+        for i, account_data in enumerate(real_accounts):
             success, response = self.run_test(
-                f"Create Batch Test Account {i}",
+                f"Create Real Test Account {i+1}",
                 "POST",
                 "accounts",
                 200,
-                data=test_account
+                data=account_data
             )
             
             if success and response.json().get('id'):
                 account_ids.append(response.json().get('id'))
+            elif response and response.status_code == 400:
+                # Account might already exist, try to get it
+                success2, accounts_response = self.run_test(
+                    "Get Accounts to Find Existing",
+                    "GET",
+                    "accounts",
+                    200
+                )
+                if success2:
+                    accounts = accounts_response.json()
+                    for account in accounts:
+                        if account.get("username") == account_data["username"]:
+                            account_ids.append(account.get("id"))
+                            print(f"✅ Found existing account with ID: {account.get('id')}")
         
         if not account_ids:
-            print("❌ Cannot test batch operations - no accounts created")
+            print("❌ Cannot test batch operations - no accounts available")
             return False
             
         # Test batch start operation
@@ -229,17 +243,8 @@ class XiaoBaCrawlerTester:
             data=batch_data
         )
         
-        # Clean up - delete the batch test accounts
-        batch_data["operation"] = "delete"
-        success3, _ = self.run_test(
-            "Batch Delete Operation",
-            "POST",
-            "accounts/batch",
-            200,
-            data=batch_data
-        )
-        
-        return success and success2 and success3
+        # Don't delete the real accounts
+        return success and success2
 
     def test_get_data(self):
         """Test getting crawler data"""
