@@ -165,18 +165,137 @@ class XiaoBaCrawlerTester:
         )
         return success
         
-    def test_delete_account(self):
-        """Test deleting an account"""
-        if not self.account_id:
-            print("❌ Cannot test account deletion - no account ID available")
-            return False
-            
-        success, response = self.run_test(
-            "Delete Account",
-            "DELETE",
-            f"accounts/{self.account_id}",
+    def test_auto_crawler_control(self):
+        """Test auto crawler control"""
+        # Start auto crawler
+        success1, response1 = self.run_test(
+            "Start Auto Crawler",
+            "POST",
+            "crawler/auto/start",
             200
         )
+        
+        # Check auto crawler status
+        success2, response2 = self.run_test(
+            "Get Auto Crawler Status",
+            "GET",
+            "crawler/auto/status",
+            200
+        )
+        
+        if success2:
+            status = response2.json()
+            if status.get('running'):
+                print("✅ Auto crawler is running")
+            else:
+                print("❌ Auto crawler is not running")
+        
+        # Stop auto crawler
+        success3, response3 = self.run_test(
+            "Stop Auto Crawler",
+            "POST",
+            "crawler/auto/stop",
+            200
+        )
+        
+        # Verify it's stopped
+        success4, response4 = self.run_test(
+            "Verify Auto Crawler Stopped",
+            "GET",
+            "crawler/auto/status",
+            200
+        )
+        
+        if success4:
+            status = response4.json()
+            if not status.get('running'):
+                print("✅ Auto crawler is stopped")
+            else:
+                print("❌ Auto crawler is still running")
+        
+        return success1 and success2 and success3 and success4
+        
+    def test_data_filtering(self):
+        """Test data filtering functionality"""
+        # First ensure we have some data
+        self.test_start_crawler()
+        time.sleep(2)  # Give the server a moment to process
+        
+        # Test filtering by account
+        filter_data = {
+            "account_username": "KR666",
+            "min_level": 80
+        }
+        
+        success, response = self.run_test(
+            "Filter Data by Account and Level",
+            "POST",
+            "crawler/data/filter",
+            200,
+            data=filter_data
+        )
+        
+        if success:
+            data = response.json()
+            print(f"Filtered data count: {data.get('filtered_count')}")
+            print(f"Total data count: {data.get('total_count')}")
+        
+        return success
+        
+    def test_statistics(self):
+        """Test statistics functionality"""
+        success, response = self.run_test(
+            "Get Statistics",
+            "GET",
+            "crawler/stats",
+            200
+        )
+        
+        if success:
+            stats = response.json()
+            print(f"Basic stats: {stats.get('basic_stats')}")
+            print(f"Accumulation stats: {stats.get('accumulation_stats')}")
+        
+        return success
+        
+    def test_keyword_stats(self):
+        """Test keyword statistics functionality"""
+        success1, response1 = self.run_test(
+            "Get Keyword Stats",
+            "GET",
+            "crawler/keywords",
+            200
+        )
+        
+        if success1:
+            stats = response1.json()
+            print(f"Total keywords detected: {stats.get('total_keywords_detected')}")
+            print(f"Monitored keywords: {stats.get('monitored_keywords')}")
+        
+        # Test resetting keyword stats
+        success2, response2 = self.run_test(
+            "Reset Keyword Stats",
+            "POST",
+            "crawler/keywords/reset",
+            200
+        )
+        
+        return success1 and success2
+        
+    def test_crawl_history(self):
+        """Test crawl history functionality"""
+        success, response = self.run_test(
+            "Get Crawl History",
+            "GET",
+            "crawler/history",
+            200
+        )
+        
+        if success:
+            history = response.json()
+            print(f"Total crawls: {history.get('total_crawls')}")
+            print(f"Success rate: {history.get('success_rate')}")
+        
         return success
         
     def test_batch_operation(self):
