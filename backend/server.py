@@ -94,8 +94,23 @@ class OptimizedGuildCrawler:
             chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
             chrome_options.add_experimental_option('useAutomationExtension', False)
             
-            service = Service(ChromeDriverManager().install())
-            self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            # 使用系统安装的chromium浏览器
+            chrome_options.binary_location = "/usr/bin/chromium"
+            
+            # 尝试使用系统chromium驱动或自动下载适配版本
+            try:
+                # 首先尝试使用系统的chromium驱动
+                service = Service("/usr/bin/chromedriver") if os.path.exists("/usr/bin/chromedriver") else Service()
+                self.driver = webdriver.Chrome(service=service, options=chrome_options)
+            except Exception:
+                # 如果失败，尝试自动下载适配的驱动
+                try:
+                    service = Service(ChromeDriverManager().install())
+                    self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                except Exception:
+                    # 最后尝试直接启动chromium
+                    self.driver = webdriver.Chrome(options=chrome_options)
+            
             self.driver.set_page_load_timeout(self.config.timeout)
             
             # 移除webdriver检测
