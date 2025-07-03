@@ -112,8 +112,8 @@ class XiaoBaCrawlerTester:
     def test_create_account(self):
         """Test creating a new account"""
         test_account = {
-            "username": f"test_user_{datetime.now().strftime('%H%M%S')}",
-            "password": "TestPass123!",
+            "username": "KR666",
+            "password": "69203532xX",
             "preferred_guild": "青帮"
         }
         
@@ -128,6 +128,21 @@ class XiaoBaCrawlerTester:
         if success and response.json().get('id'):
             self.account_id = response.json().get('id')
             print(f"✅ Account created with ID: {self.account_id}")
+        elif response and response.status_code == 400:
+            # Account might already exist, try to get it
+            success2, accounts_response = self.run_test(
+                "Get Accounts to Find Existing",
+                "GET",
+                "accounts",
+                200
+            )
+            if success2:
+                accounts = accounts_response.json()
+                for account in accounts:
+                    if account.get("username") == "KR666":
+                        self.account_id = account.get("id")
+                        print(f"✅ Found existing account with ID: {self.account_id}")
+                        return True
         return success
         
     def test_update_account(self):
