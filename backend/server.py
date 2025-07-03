@@ -40,11 +40,14 @@ crawl_history = []
 auto_crawl_running = False
 accumulated_data = {}
 
-# 关键词监控列表
-MONITOR_KEYWORDS = [
+# 默认关键词监控列表
+DEFAULT_MONITOR_KEYWORDS = [
     "人脸提示", "没钱了", "网络异常", "登录失败", "验证码", 
     "账号冻结", "系统维护", "连接超时", "服务器错误", "掉线"
 ]
+
+# 动态关键词监控列表（可以增删）
+MONITOR_KEYWORDS = DEFAULT_MONITOR_KEYWORDS.copy()
 
 class CrawlerAccount(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
