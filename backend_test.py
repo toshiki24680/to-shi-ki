@@ -433,21 +433,32 @@ def main():
     
     # Run tests
     print("=" * 50)
-    print("🚀 Testing 小八爬虫管理系统 API - 师门登录优化版 v2.1")
+    print("🚀 Testing 小八爬虫管理系统 API - 师门登录优化版 v2.5")
     print("=" * 50)
     
     # Test basic endpoints
     tester.test_root_endpoint()
     tester.test_version_endpoint()
     
+    # Test account management
+    tester.test_create_account()
+    tester.test_get_accounts()
+    tester.test_update_account()
+    tester.test_batch_operation()
+    
+    # Test auto crawler functionality
+    tester.test_auto_crawler_control()
+    
     # Test crawler functionality
     tester.test_start_crawler()
-    tester.test_get_accounts()
-    
-    # Test data generation and retrieval
-    tester.test_generate_mock_data()
-    time.sleep(1)  # Give the server a moment to process
+    time.sleep(2)  # Give the server a moment to process
     tester.test_get_data()
+    
+    # Test data filtering and statistics
+    tester.test_data_filtering()
+    tester.test_statistics()
+    tester.test_keyword_stats()
+    tester.test_crawl_history()
     
     # Test status and export
     tester.test_get_status()
