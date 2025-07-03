@@ -101,6 +101,12 @@ class CrawlerConfig(BaseModel):
     auto_crawl_enabled: bool = False
     max_concurrent_crawlers: int = 3
 
+class KeywordRequest(BaseModel):
+    keyword: str
+
+class KeywordListRequest(BaseModel):
+    keywords: List[str]
+
 class FilterRequest(BaseModel):
     account_username: Optional[str] = None
     guild: Optional[str] = None
