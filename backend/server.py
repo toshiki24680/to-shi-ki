@@ -786,7 +786,8 @@ async def get_keyword_stats():
         "keyword_stats": dict(keyword_stats),
         "total_keywords_detected": sum(keyword_stats.values()),
         "unique_keywords": len(keyword_stats),
-        "monitored_keywords": MONITOR_KEYWORDS
+        "monitored_keywords": MONITOR_KEYWORDS,
+        "default_keywords": DEFAULT_MONITOR_KEYWORDS
     }
 
 @api_router.post("/crawler/keywords/reset")
@@ -795,6 +796,115 @@ async def reset_keyword_stats():
     global keyword_stats
     keyword_stats.clear()
     return {"message": "关键词统计已重置"}
+
+@api_router.post("/crawler/keywords/add")
+async def add_custom_keyword(request: KeywordRequest):
+    """添加自定义关键词"""
+    global MONITOR_KEYWORDS
+    
+    keyword = request.keyword.strip()
+    if not keyword:
+        raise HTTPException(status_code=400, detail="关键词不能为空")
+    
+    if keyword in MONITOR_KEYWORDS:
+        raise HTTPException(status_code=400, detail="关键词已存在")
+    
+    MONITOR_KEYWORDS.append(keyword)
+    logger.info(f"添加自定义关键词: {keyword}")
+    
+    return {
+        "message": f"关键词 '{keyword}' 添加成功",
+        "keyword": keyword,
+        "total_keywords": len(MONITOR_KEYWORDS),
+        "monitored_keywords": MONITOR_KEYWORDS
+    }
+
+@api_router.delete("/crawler/keywords/{keyword}")
+async def delete_keyword(keyword: str):
+    """删除关键词"""
+    global MONITOR_KEYWORDS
+    
+    if keyword not in MONITOR_KEYWORDS:
+        raise HTTPException(status_code=404, detail="关键词不存在")
+    
+    if keyword in DEFAULT_MONITOR_KEYWORDS:
+        raise HTTPException(status_code=400, detail="默认关键词不能删除")
+    
+    MONITOR_KEYWORDS.remove(keyword)
+    
+    # 同时清除该关键词的统计数据
+    if keyword in keyword_stats:
+        del keyword_stats[keyword]
+    
+    logger.info(f"删除关键词: {keyword}")
+    
+    return {
+        "message": f"关键词 '{keyword}' 删除成功",
+        "keyword": keyword,
+        "total_keywords": len(MONITOR_KEYWORDS),
+        "monitored_keywords": MONITOR_KEYWORDS
+    }
+
+@api_router.post("/crawler/keywords/batch")
+async def batch_add_keywords(request: KeywordListRequest):
+    """批量添加关键词"""
+    global MONITOR_KEYWORDS
+    
+    added_keywords = []
+    skipped_keywords = []
+    
+    for keyword in request.keywords:
+        keyword = keyword.strip()
+        if not keyword:
+            continue
+            
+        if keyword in MONITOR_KEYWORDS:
+            skipped_keywords.append(keyword)
+        else:
+            MONITOR_KEYWORDS.append(keyword)
+            added_keywords.append(keyword)
+    
+    logger.info(f"批量添加关键词: {added_keywords}")
+    
+    return {
+        "message": f"批量添加完成",
+        "added_keywords": added_keywords,
+        "skipped_keywords": skipped_keywords,
+        "added_count": len(added_keywords),
+        "skipped_count": len(skipped_keywords),
+        "total_keywords": len(MONITOR_KEYWORDS),
+        "monitored_keywords": MONITOR_KEYWORDS
+    }
+
+@api_router.get("/crawler/keywords/defaults")
+async def get_default_keywords():
+    """获取默认关键词列表"""
+    return {
+        "default_keywords": DEFAULT_MONITOR_KEYWORDS,
+        "current_keywords": MONITOR_KEYWORDS,
+        "custom_keywords": [k for k in MONITOR_KEYWORDS if k not in DEFAULT_MONITOR_KEYWORDS]
+    }
+
+@api_router.post("/crawler/keywords/restore-defaults")
+async def restore_default_keywords():
+    """恢复默认关键词"""
+    global MONITOR_KEYWORDS
+    
+    # 保留自定义关键词
+    custom_keywords = [k for k in MONITOR_KEYWORDS if k not in DEFAULT_MONITOR_KEYWORDS]
+    
+    # 重置为默认关键词 + 自定义关键词
+    MONITOR_KEYWORDS = DEFAULT_MONITOR_KEYWORDS.copy() + custom_keywords
+    
+    logger.info("恢复默认关键词设置")
+    
+    return {
+        "message": "默认关键词已恢复",
+        "default_keywords": DEFAULT_MONITOR_KEYWORDS,
+        "custom_keywords": custom_keywords,
+        "total_keywords": len(MONITOR_KEYWORDS),
+        "monitored_keywords": MONITOR_KEYWORDS
+    }
 
 # 爬虫历史
 @api_router.get("/crawler/history")
