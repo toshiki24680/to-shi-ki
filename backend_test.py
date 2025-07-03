@@ -101,13 +101,130 @@ class XiaoBaCrawlerTester:
         success, response = self.run_test(
             "Get Accounts",
             "GET",
-            "crawler/accounts",
+            "accounts",
             200
         )
         if success:
             accounts = response.json()
             print(f"Found {len(accounts)} accounts")
         return success
+        
+    def test_create_account(self):
+        """Test creating a new account"""
+        test_account = {
+            "username": f"test_user_{datetime.now().strftime('%H%M%S')}",
+            "password": "TestPass123!",
+            "preferred_guild": "青帮"
+        }
+        
+        success, response = self.run_test(
+            "Create Account",
+            "POST",
+            "accounts",
+            200,
+            data=test_account
+        )
+        
+        if success and response.json().get('id'):
+            self.account_id = response.json().get('id')
+            print(f"✅ Account created with ID: {self.account_id}")
+        return success
+        
+    def test_update_account(self):
+        """Test updating an account"""
+        if not self.account_id:
+            print("❌ Cannot test account update - no account ID available")
+            return False
+            
+        update_data = {
+            "is_auto_enabled": False,
+            "status": "paused"
+        }
+        
+        success, response = self.run_test(
+            "Update Account",
+            "PUT",
+            f"accounts/{self.account_id}",
+            200,
+            data=update_data
+        )
+        return success
+        
+    def test_delete_account(self):
+        """Test deleting an account"""
+        if not self.account_id:
+            print("❌ Cannot test account deletion - no account ID available")
+            return False
+            
+        success, response = self.run_test(
+            "Delete Account",
+            "DELETE",
+            f"accounts/{self.account_id}",
+            200
+        )
+        return success
+        
+    def test_batch_operation(self):
+        """Test batch operation on accounts"""
+        # First create a few test accounts
+        account_ids = []
+        for i in range(3):
+            test_account = {
+                "username": f"batch_test_{i}_{datetime.now().strftime('%H%M%S')}",
+                "password": "BatchTest123!",
+                "preferred_guild": "无门派"
+            }
+            
+            success, response = self.run_test(
+                f"Create Batch Test Account {i}",
+                "POST",
+                "accounts",
+                200,
+                data=test_account
+            )
+            
+            if success and response.json().get('id'):
+                account_ids.append(response.json().get('id'))
+        
+        if not account_ids:
+            print("❌ Cannot test batch operations - no accounts created")
+            return False
+            
+        # Test batch start operation
+        batch_data = {
+            "account_ids": account_ids,
+            "operation": "start"
+        }
+        
+        success, response = self.run_test(
+            "Batch Start Operation",
+            "POST",
+            "accounts/batch",
+            200,
+            data=batch_data
+        )
+        
+        # Test batch stop operation
+        batch_data["operation"] = "stop"
+        success2, response2 = self.run_test(
+            "Batch Stop Operation",
+            "POST",
+            "accounts/batch",
+            200,
+            data=batch_data
+        )
+        
+        # Clean up - delete the batch test accounts
+        batch_data["operation"] = "delete"
+        success3, _ = self.run_test(
+            "Batch Delete Operation",
+            "POST",
+            "accounts/batch",
+            200,
+            data=batch_data
+        )
+        
+        return success and success2 and success3
 
     def test_get_data(self):
         """Test getting crawler data"""
