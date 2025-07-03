@@ -149,6 +149,7 @@ class XiaoBaCrawlerTester:
         """Test updating an account"""
         if not self.account_id:
             print("❌ Cannot test account update - no account ID available")
+            self.tests_run += 1  # Count as run but not passed
             return False
             
         update_data = {
@@ -156,7 +157,7 @@ class XiaoBaCrawlerTester:
             "status": "paused"
         }
         
-        success, response = self.run_test(
+        success, _ = self.run_test(
             "Update Account",
             "PUT",
             f"accounts/{self.account_id}",
