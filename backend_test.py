@@ -9,6 +9,7 @@ class XiaoBaCrawlerTester:
         self.api_url = f"{base_url}/api"
         self.tests_run = 0
         self.tests_passed = 0
+        self.account_id = None  # Store created account ID for later tests
 
     def run_test(self, name, method, endpoint, expected_status, data=None):
         """Run a single API test"""
