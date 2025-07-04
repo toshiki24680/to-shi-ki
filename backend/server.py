@@ -100,6 +100,7 @@ class CrawlerConfig(BaseModel):
     timeout: int = 30
     auto_crawl_enabled: bool = False
     max_concurrent_crawlers: int = 10
+    max_active_accounts: int = 10
 
 class KeywordRequest(BaseModel):
     keyword: str
