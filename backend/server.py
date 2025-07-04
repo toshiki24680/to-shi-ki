@@ -944,12 +944,48 @@ async def get_crawl_history():
 # 原有API保持兼容
 @api_router.post("/crawler/start")
 async def start_crawler():
-    if not accounts_db:
-        default_accounts = ["KR666", "KR777", "KR888", "KR999", "KR000"]
-        for username in default_accounts:
-            account = CrawlerAccount(username=username, password="69203532xX")
+    global accounts_db
+    config = CrawlerConfig()
+    max_active = config.max_active_accounts
+    
+    if len(accounts_db) < max_active:
+        # 创建足够的账号以达到max_active数量
+        base_accounts = ["KR666", "KR777", "KR888", "KR999", "KR000"]
+        additional_accounts = ["KR001", "KR002", "KR003", "KR004", "KR005"]
+        
+        all_usernames = base_accounts + additional_accounts
+        
+        # 清空现有账号并重新创建
+        accounts_db.clear()
+        
+        for i in range(max_active):
+            username = all_usernames[i] if i < len(all_usernames) else f"KR{str(i+1).zfill(3)}"
+            account = CrawlerAccount(
+                username=username, 
+                password="69203532xX",
+                status="active" if i < max_active else "inactive",
+                is_auto_enabled=i < max_active
+            )
             accounts_db.append(account.dict())
-    return {"message": "师门爬虫启动成功", "accounts": len(accounts_db), "version": "2.5"}
+    
+    # 确保前max_active个账号为活跃状态
+    for i, acc in enumerate(accounts_db):
+        if i < max_active:
+            acc["status"] = "active"
+            acc["is_auto_enabled"] = True
+        else:
+            acc["status"] = "inactive"
+            acc["is_auto_enabled"] = False
+    
+    active_count = len([acc for acc in accounts_db if acc.get("is_auto_enabled", False)])
+    
+    return {
+        "message": "师门爬虫启动成功", 
+        "accounts": len(accounts_db), 
+        "active_accounts": active_count,
+        "max_active_accounts": max_active,
+        "version": "2.5"
+    }
 
 @api_router.post("/crawler/mock-data")
 async def generate_mock_data():
