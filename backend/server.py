@@ -589,6 +589,20 @@ async def stop_auto_crawler():
     auto_crawl_running = False
     return {"message": "自动爬虫停止成功"}
 
+@api_router.get("/crawler/config")
+async def get_crawler_config():
+    """获取爬虫配置信息"""
+    config = CrawlerConfig()
+    return {
+        "target_url": config.target_url,
+        "crawl_interval": config.crawl_interval,
+        "headless": config.headless,
+        "timeout": config.timeout,
+        "max_concurrent_crawlers": config.max_concurrent_crawlers,
+        "auto_crawl_enabled": auto_crawl_running,
+        "version": "2.5"
+    }
+
 @api_router.get("/crawler/auto/status")
 async def get_auto_crawler_status():
     return {
