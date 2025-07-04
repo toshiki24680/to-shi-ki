@@ -449,39 +449,47 @@ class OptimizedGuildCrawler:
 
 # 自动爬虫任务
 async def auto_crawl_task():
-    """45秒自动爬虫任务 - 保持所有账号活跃"""
+    """45秒自动爬虫任务 - 保持10个账号活跃"""
     global auto_crawl_running, accounts_db
     
-    logger.info("启动自动爬虫任务 - 所有账号保持活跃模式...")
+    logger.info("启动自动爬虫任务 - 维持10个账号活跃模式...")
     
     while auto_crawl_running:
         try:
-            # 获取所有账号，强制保持活跃状态
-            if not accounts_db:
-                logger.info("没有账号，等待45秒...")
+            # 获取配置
+            config = CrawlerConfig()
+            max_active = config.max_active_accounts
+            
+            # 确保有足够的账号
+            if len(accounts_db) < max_active:
+                logger.info(f"账号数量不足，当前{len(accounts_db)}个，需要{max_active}个")
                 await asyncio.sleep(45)
                 continue
             
-            # 强制将所有账号设置为活跃状态
-            for acc in accounts_db:
+            # 强制将前max_active个账号设置为活跃状态
+            for i, acc in enumerate(accounts_db[:max_active]):
                 if acc.get("status") not in ["running"]:  # 只有正在运行的不改变状态
                     acc["status"] = "active"
                     acc["is_auto_enabled"] = True
             
-            active_accounts = [acc for acc in accounts_db if acc.get("is_auto_enabled", True)]
+            # 将超出限制的账号设置为非活跃
+            for acc in accounts_db[max_active:]:
+                acc["status"] = "inactive"
+                acc["is_auto_enabled"] = False
+            
+            # 获取活跃账号进行爬取
+            active_accounts = [acc for acc in accounts_db[:max_active] if acc.get("is_auto_enabled", True)]
             
             if not active_accounts:
-                logger.info("没有可用的账号")
+                logger.info("没有可用的活跃账号")
                 await asyncio.sleep(45)
                 continue
             
-            logger.info(f"开始45秒爬虫周期，处理 {len(active_accounts)} 个账号...")
-            
-            # 限制并发数量
-            config = CrawlerConfig()
-            max_concurrent = min(config.max_concurrent_crawlers, len(active_accounts))
+            logger.info(f"开始45秒爬虫周期，维持 {len(active_accounts)} 个活跃账号...")
             
             # 分批执行爬虫任务
+            max_concurrent = min(config.max_concurrent_crawlers, len(active_accounts))
+            
             for i in range(0, len(active_accounts), max_concurrent):
                 batch = active_accounts[i:i + max_concurrent]
                 tasks = []
@@ -525,7 +533,7 @@ async def auto_crawl_task():
                                 acc["success_rate"] = max(0.1, acc.get("success_rate", 0.5))  # 最低保持10%
                                 logger.warning(f"账号 {acc['username']} 爬取失败，但保持活跃")
                             
-                            # 确保自动启用标志始终为True
+                            # 确保自动启用标志始终为True（仅前max_active个）
                             acc["is_auto_enabled"] = True
                             break
                 
@@ -535,13 +543,15 @@ async def auto_crawl_task():
                 if i + max_concurrent < len(active_accounts):
                     await asyncio.sleep(5)
             
-            logger.info(f"自动爬虫周期完成，所有账号保持活跃状态，等待 {config.crawl_interval} 秒...")
+            # 统计当前活跃账号数
+            current_active = len([acc for acc in accounts_db if acc.get("status") in ["active", "running"]])
+            logger.info(f"自动爬虫周期完成，当前活跃账号: {current_active}/{max_active}，等待 {config.crawl_interval} 秒...")
             await asyncio.sleep(config.crawl_interval)
             
         except Exception as e:
             logger.error(f"自动爬虫任务异常: {str(e)}")
-            # 即使出现异常也要保持所有账号活跃
-            for acc in accounts_db:
+            # 即使出现异常也要保持前max_active个账号活跃
+            for i, acc in enumerate(accounts_db[:config.max_active_accounts]):
                 acc["status"] = "active"
                 acc["is_auto_enabled"] = True
             await asyncio.sleep(45)
