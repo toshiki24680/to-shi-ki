@@ -610,6 +610,7 @@ async def get_crawler_config():
         "headless": config.headless,
         "timeout": config.timeout,
         "max_concurrent_crawlers": config.max_concurrent_crawlers,
+        "max_active_accounts": config.max_active_accounts,
         "auto_crawl_enabled": auto_crawl_running,
         "version": "2.5"
     }
