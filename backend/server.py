@@ -99,7 +99,7 @@ class CrawlerConfig(BaseModel):
     headless: bool = True
     timeout: int = 30
     auto_crawl_enabled: bool = False
-    max_concurrent_crawlers: int = 3
+    max_concurrent_crawlers: int = 10
 
 class KeywordRequest(BaseModel):
     keyword: str
